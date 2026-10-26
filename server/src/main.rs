@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
     extract::{Query, Request, State},
-    http::header,
+    http::{ header, Method },
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
+use tower_http::cors::{Any, CorsLayer};
 
 /*
 Endpoints:
@@ -195,6 +196,10 @@ async fn main() {
         secret_key: Arc::new(std::env::var("SECRET_KEY").expect("SECRET_KEY must be set")),
     };
 
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET]);
+
     let app = Router::new()
         .route("/", get(root))
         .route(
@@ -204,6 +209,7 @@ async fn main() {
                 auth_middleware,
             ))),
         )
+        .layer(cors)
         .layer(middleware::from_fn(logging_middleware))
         .with_state(state);
 
