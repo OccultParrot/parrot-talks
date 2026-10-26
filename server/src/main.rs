@@ -38,6 +38,7 @@ struct Post {
     title: String,
     content: String,
     created_at: DateTime<Utc>,
+    id: i32,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -120,7 +121,7 @@ async fn get_posts(
     let offset = (page - 1) * limit;
 
     let posts = sqlx::query_as::<_, Post>(
-        "SELECT title, content, created_at FROM posts ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+        "SELECT title, content, created_at, id FROM posts ORDER BY created_at DESC LIMIT $1 OFFSET $2",
     )
     .bind(limit)
     .bind(offset)
@@ -139,7 +140,7 @@ async fn post_posts(
     Json(payload): Json<CreatePost>,
 ) -> Result<(StatusCode, Json<Post>), StatusCode> {
     let post = sqlx::query_as::<_, Post>(
-        "INSERT INTO posts (title, content) VALUES ($1, $2) RETURNING title, content, created_at",
+        "INSERT INTO posts (title, content) VALUES ($1, $2) RETURNING title, content, created_at, id",
     )
     .bind(&payload.title)
     .bind(&payload.content)
