@@ -1,14 +1,18 @@
 use axum::{
     Json, Router,
-    extract::Request,
+    extract::{Query, Request, State},
+    http::header,
     middleware::{self, Next},
-    response::Response,
-    routing::get,
+    response::{IntoResponse, Response},
+    routing::{get, post},
 };
+use chrono::{DateTime, Utc};
+use colored::Colorize;
 use hyper::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
 
 /*
 Endpoints:
@@ -29,43 +33,123 @@ struct AppState {
     secret_key: Arc<String>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, sqlx::FromRow)]
 struct Post {
     title: String,
     content: String,
+    created_at: DateTime<Utc>,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
 struct CreatePost {
     title: String,
     content: String,
-    secret_key: String,
+}
+
+#[derive(Deserialize)]
+struct Pagination {
+    limit: Option<i64>,
+    page: Option<i64>,
 }
 
 async fn logging_middleware(req: Request, next: Next) -> Response {
-    println!("-> Request received: {} {}", req.method(), req.uri());
+    let method_color = match req.method() {
+        &hyper::Method::GET => "blue",
+        &hyper::Method::POST => "green",
+        &hyper::Method::PUT => "yellow",
+        &hyper::Method::DELETE => "red",
+        _ => "white",
+    };
+
+    println!(
+        "{} Request received: {} {}",
+        "->".cyan(),
+        req.method().to_string().color(method_color),
+        req.uri()
+    );
+
     let res = next.run(req).await;
-    println!("<- Response status: {}", res.status());
+
+    let res_color = match res.status() {
+        StatusCode::OK => "green",
+        StatusCode::CREATED => "green",
+        StatusCode::BAD_REQUEST => "yellow",
+        StatusCode::UNAUTHORIZED => "red",
+        StatusCode::INTERNAL_SERVER_ERROR => "red",
+        _ => "white",
+    };
+
+    println!(
+        "{} Response status: {}",
+        "<-".cyan(),
+        res.status().to_string().color(res_color)
+    );
 
     res
 }
 
-async fn root() -> &'static str {
-    "Hello from Axum!"
-}
+async fn auth_middleware(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    let authorized = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .is_some_and(|token| token.as_bytes().ct_eq(state.secret_key.as_bytes()).into());
 
-async fn get_posts() -> (StatusCode, Json<Vec<Post>>) {
-    return (StatusCode::OK, Json(vec![]));
-}
+    if !authorized {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
 
-async fn post_posts(Json(payload): Json<CreatePost>) -> (StatusCode, Json<Post>) {
-    return (
-        StatusCode::OK,
-        Json(Post {
-            title: payload.title,
-            content: payload.content,
-        }),
+    println!(
+        "   {}",
+        "Authorization successful for POST request.".green()
     );
+    next.run(req).await
+}
+
+async fn root() -> &'static str {
+    "Hello from my blog!"
+}
+
+async fn get_posts(
+    State(state): State<AppState>,
+    Query(pagination): Query<Pagination>,
+) -> Result<Json<Vec<Post>>, StatusCode> {
+    let limit = pagination.limit.unwrap_or(10).clamp(1, 100);
+    let page = pagination.page.unwrap_or(1).max(1);
+    let offset = (page - 1) * limit;
+
+    let posts = sqlx::query_as::<_, Post>(
+        "SELECT title, content, created_at FROM posts ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| {
+        eprintln!("get_posts failed: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(posts))
+}
+
+async fn post_posts(
+    State(state): State<AppState>,
+    Json(payload): Json<CreatePost>,
+) -> Result<(StatusCode, Json<Post>), StatusCode> {
+    let post = sqlx::query_as::<_, Post>(
+        "INSERT INTO posts (title, content) VALUES ($1, $2) RETURNING title, content, created_at",
+    )
+    .bind(&payload.title)
+    .bind(&payload.content)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| {
+        eprintln!("post_posts failed: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    Ok((StatusCode::CREATED, Json(post)))
 }
 
 async fn graceful_shutdown_signal() {
@@ -112,12 +196,21 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(root))
-        .route("/posts", get(get_posts).post(post_posts))
-        .with_state(state)
-        .layer(middleware::from_fn(logging_middleware));
+        .route(
+            "/posts",
+            get(get_posts).merge(post(post_posts).route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                auth_middleware,
+            ))),
+        )
+        .layer(middleware::from_fn(logging_middleware))
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
 
     println!("Server running on {}", listener.local_addr().unwrap());
-    axum::serve(listener, app).with_graceful_shutdown(graceful_shutdown_signal()).await.unwrap();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(graceful_shutdown_signal())
+        .await
+        .unwrap();
 }
