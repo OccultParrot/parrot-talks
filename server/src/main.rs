@@ -35,6 +35,7 @@ struct AppState {
 }
 
 #[derive(Serialize, Clone, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
 struct Post {
     title: String,
     content: String,
