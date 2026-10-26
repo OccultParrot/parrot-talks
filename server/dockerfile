@@ -1,0 +1,21 @@
+FROM rust:1-slim-bookworm AS builder
+WORKDIR /app
+
+# Build dependencies against a stub main so they stay cached until Cargo.toml/Cargo.lock change
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir src && echo "fn main() {}" > src/main.rs \
+    && cargo build --release \
+    && rm -rf src
+
+COPY src ./src
+RUN touch src/main.rs && cargo build --release
+
+FROM debian:bookworm-slim AS runtime
+WORKDIR /app
+
+RUN useradd --system --no-create-home appuser
+COPY --from=builder /app/target/release/parrot-talks-server /usr/local/bin/parrot-talks-server
+USER appuser
+
+EXPOSE 3000
+CMD ["parrot-talks-server"]
