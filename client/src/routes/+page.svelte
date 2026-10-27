@@ -1,7 +1,7 @@
 <script lang="ts">
     import Markdown from '../components/Markdown.svelte';
     import type { PageProps } from './$types';
-    import type { Post } from './+page';
+    import type { Post } from './+page.server';
 
     let { data }: PageProps = $props();
 

@@ -1,5 +1,6 @@
 import { error } from '@sveltejs/kit';
-import type { PageLoad } from './$types';
+import type { PageServerLoad } from './$types';
+import { BACKEND_URL } from '$app/env/private';
 
 export interface Post {
     id: number;
@@ -8,10 +9,10 @@ export interface Post {
     createdAt: Date;
 }
 
-export const load: PageLoad = async ({ fetch }) => {
+export const load: PageServerLoad = async ({ fetch }) => {
     // At start we load the 10 most recent posts
     // Simulate fetching posts from an API
-    const response = await fetch('https://blog-api.stemler.dev/posts?limit=10&page=1');
+    const response = await fetch(`${BACKEND_URL}/posts?limit=10&page=1`);
 
     if (!response.ok) {
         error(response.status, 'Failed to load posts');
